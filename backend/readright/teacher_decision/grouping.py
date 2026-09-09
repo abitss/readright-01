@@ -35,24 +35,28 @@ def build_instruction_groups(decisions: list[LearnerTeacherDecision]) -> list[In
             reason = "These learners are ready for the same verification stage."
             verification_stage = key[1]
             intervention_id = None
+            recommended_minutes = 5
         elif kind == "TEACH":
             priority = 2
             label = members[0].do.title if members[0].do else "Teacher action"
             reason = "These learners share the same current actionable barrier and intervention routine."
             verification_stage = None
             intervention_id = members[0].do.intervention_id if members[0].do else None
+            recommended_minutes = members[0].do.duration_minutes if members[0].do and members[0].do.duration_minutes else 8
         elif kind == "EVIDENCE":
             priority = 3
             label = "Focused evidence check"
             reason = "Do not group these learners for remediation yet; collect distinguishing evidence first."
             verification_stage = None
             intervention_id = None
+            recommended_minutes = 4
         else:
             priority = 4
             label = "Independent / monitor"
             reason = "No immediate teacher-led action is supported by current evidence."
             verification_stage = None
             intervention_id = None
+            recommended_minutes = 0
 
         groups.append(
             InstructionGroup(
@@ -61,6 +65,7 @@ def build_instruction_groups(decisions: list[LearnerTeacherDecision]) -> list[In
                 learner_ids=sorted(member.learner_id for member in members),
                 intervention_id=intervention_id,
                 verification_stage=verification_stage,
+                recommended_minutes=max(1, recommended_minutes) if priority <= 3 else 1,
                 priority=priority,
                 reason=reason,
             )
@@ -90,32 +95,45 @@ def build_30_minute_plan(decisions: list[LearnerTeacherDecision], total_minutes:
         order += 1
         remaining -= launch
 
-    # Preserve a short closure. Up to three teacher-led rotations avoids an unusable plan.
     closure = 3 if remaining >= 6 else 0
-    usable_for_groups = max(0, remaining - closure)
-    selected = active[:3]
+    remaining_for_work = max(0, remaining - closure)
+    selected: list[InstructionGroup] = []
 
-    if selected and usable_for_groups:
-        base = usable_for_groups // len(selected)
-        extra = usable_for_groups % len(selected)
-        for index, group in enumerate(selected):
-            minutes = base + (1 if index < extra else 0)
-            action = {
-                1: f"Run the due {group.verification_stage or 'verification'} check using unseen material. Record independence and evidence quality.",
-                2: f"Teach the approved routine for {group.label}. Keep prompts and assistance observable.",
-                3: "Run a short focused probe only. Do not begin remediation until the competing explanations are better separated.",
-            }[group.priority]
-            rotations.append(
-                RotationBlock(
-                    order=order,
-                    minutes=minutes,
-                    group_id=group.group_id,
-                    title=group.label,
-                    action=action,
-                    learner_ids=group.learner_ids,
-                )
+    for group in active[:3]:
+        if remaining_for_work <= 0:
+            break
+        minutes = min(group.recommended_minutes, remaining_for_work)
+        if minutes <= 0:
+            continue
+        selected.append(group)
+        action = {
+            1: f"Run the due {group.verification_stage or 'verification'} check using unseen material. Record independence and evidence quality.",
+            2: f"Teach the approved routine for {group.label}. Keep prompts, assistance, and delivery fidelity observable.",
+            3: "Run a short focused probe only. Do not begin remediation until competing explanations are better separated.",
+        }[group.priority]
+        rotations.append(
+            RotationBlock(
+                order=order,
+                minutes=minutes,
+                group_id=group.group_id,
+                title=group.label,
+                action=action,
+                learner_ids=group.learner_ids,
             )
-            order += 1
+        )
+        order += 1
+        remaining_for_work -= minutes
+
+    if remaining_for_work > 0:
+        rotations.append(
+            RotationBlock(
+                order=order,
+                minutes=remaining_for_work,
+                title="Independent practice and teacher observation",
+                action="Keep practice within already taught skills. Use the time for independent work, brief observation, or setup for deferred probes rather than extending intervention dosage automatically.",
+            )
+        )
+        order += 1
 
     if closure:
         rotations.append(
@@ -123,7 +141,7 @@ def build_30_minute_plan(decisions: list[LearnerTeacherDecision], total_minutes:
                 order=order,
                 minutes=closure,
                 title="Close and record",
-                action="Record fidelity, prompts, notable observations, and any evidence that changes the next decision.",
+                action="Record delivery fidelity, prompts, notable observations, and evidence that may change the next decision.",
             )
         )
 
