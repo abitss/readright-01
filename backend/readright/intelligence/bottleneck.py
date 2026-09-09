@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from readright.intelligence.hypotheses import evaluate_english_hypotheses
-from readright.intelligence.models import BottleneckDecision, HypothesisStatus
+from readright.intelligence.models import BottleneckDecision, HypothesisRecord, HypothesisStatus
 
 
-def decide_bottleneck(evidence: list[dict], language: str) -> BottleneckDecision:
+def decide_bottleneck_from_hypotheses(hypotheses: list[HypothesisRecord], language: str) -> BottleneckDecision:
     if language != "en":
         return BottleneckDecision(
             outcome="MORE_EVIDENCE_REQUIRED",
@@ -12,7 +12,6 @@ def decide_bottleneck(evidence: list[dict], language: str) -> BottleneckDecision
             rationale=["The Hindi learner-state layer must be designed independently from English."],
         )
 
-    hypotheses = evaluate_english_hypotheses(evidence)
     supported = [h for h in hypotheses if h.status == HypothesisStatus.SUPPORTED]
     possible = [h for h in hypotheses if h.status == HypothesisStatus.POSSIBLE]
 
@@ -52,5 +51,11 @@ def decide_bottleneck(evidence: list[dict], language: str) -> BottleneckDecision
 
     return BottleneckDecision(
         outcome="NO_ACTIONABLE_BARRIER_IDENTIFIED",
-        rationale=["Current assessment evidence does not support an actionable barrier under the pilot rules."],
+        rationale=["Current assessment and intervention-response evidence does not support an actionable barrier under the pilot rules."],
     )
+
+
+def decide_bottleneck(evidence: list[dict], language: str) -> BottleneckDecision:
+    if language != "en":
+        return decide_bottleneck_from_hypotheses([], language)
+    return decide_bottleneck_from_hypotheses(evaluate_english_hypotheses(evidence), language)
