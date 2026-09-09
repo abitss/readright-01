@@ -1,0 +1,11 @@
+{
+  "name": "readright-platform",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @readright/web",
+    "build:web": "npm run build --workspace @readright/web",
+    "lint:web": "npm run lint --workspace @readright/web",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
