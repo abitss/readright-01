@@ -15,6 +15,13 @@ class SkillNode:
 ENGLISH_SKILLS: dict[str, SkillNode] = {
     "EN-ORAL-COMP": SkillNode("EN-ORAL-COMP", "en", "Oral language comprehension", "oral_language"),
     "EN-PHON-AWARE": SkillNode("EN-PHON-AWARE", "en", "Phoneme awareness", "phonology"),
+    "EN-PHON-ISOLATE": SkillNode(
+        "EN-PHON-ISOLATE",
+        "en",
+        "Phoneme isolation",
+        "phonology",
+        ("EN-PHON-AWARE",),
+    ),
     "EN-PHON-BLEND-CVC": SkillNode(
         "EN-PHON-BLEND-CVC",
         "en",
@@ -28,6 +35,13 @@ ENGLISH_SKILLS: dict[str, SkillNode] = {
         "Phoneme segmentation",
         "phonology",
         ("EN-PHON-AWARE",),
+    ),
+    "EN-PHON-MANIP": SkillNode(
+        "EN-PHON-MANIP",
+        "en",
+        "Phoneme manipulation",
+        "phonology",
+        ("EN-PHON-ISOLATE", "EN-PHON-SEG"),
     ),
     "EN-LETTER-RECOG": SkillNode("EN-LETTER-RECOG", "en", "Letter recognition", "print_code"),
     "EN-GPC": SkillNode(
