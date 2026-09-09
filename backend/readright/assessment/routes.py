@@ -7,6 +7,9 @@ from readright.assessment.models import AssessmentSession, ResponseInput, StartA
 from readright.assessment.planner import planner_reason, select_first_task
 from readright.assessment.stopping import evaluate_stop
 from readright.assessment.task_bank import META, bank_summary, get_task_stimulus
+from readright.intelligence.bottleneck import decide_bottleneck
+from readright.intelligence.learner_state import derive_learner_state
+from readright.intelligence.hypotheses import evaluate_english_hypotheses
 
 router = APIRouter()
 _sessions: dict[str, AssessmentSession] = {}
@@ -37,15 +40,13 @@ def start_assessment(request: StartAssessmentRequest) -> dict:
     _sessions[session.id] = session
     _evidence[session.id] = []
     reason = planner_reason(request.mode, request.target_skill_id)
-    _selection_log[session.id] = [
-        {
-            "task_id": task.id,
-            "skill_id": task.skill_id,
-            "reason": reason,
-            "decision_kind": "INITIAL_ANCHOR",
-            "policy_version": POLICY_VERSION,
-        }
-    ]
+    _selection_log[session.id] = [{
+        "task_id": task.id,
+        "skill_id": task.skill_id,
+        "reason": reason,
+        "decision_kind": "INITIAL_ANCHOR",
+        "policy_version": POLICY_VERSION,
+    }]
     return {
         "session": session,
         "task_stimulus": get_task_stimulus(task.id),
@@ -68,7 +69,6 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
     completed_task = session.current_task
     quality = rate_evidence(response)
     task_meta = META.get(completed_task.id)
-
     event = {
         "task_id": response.task_id,
         "skill_id": completed_task.skill_id,
@@ -94,13 +94,7 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
         evidence=_evidence[session_id],
         teacher_concern_skill_id=session.target_skill_id,
     )
-
-    stop_outcome = evaluate_stop(
-        mode=session.mode,
-        evidence=_evidence[session_id],
-        has_next_task=decision.task is not None,
-    )
-
+    stop_outcome = evaluate_stop(mode=session.mode, evidence=_evidence[session_id], has_next_task=decision.task is not None)
     snapshot = frontier_snapshot(_evidence[session_id], language=session.language)
 
     if stop_outcome is not None:
@@ -118,16 +112,14 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
 
     next_task = decision.task
     session.current_task = next_task
-    _selection_log[session_id].append(
-        {
-            "task_id": next_task.id,
-            "skill_id": next_task.skill_id,
-            "reason": decision.reason,
-            "decision_kind": decision.kind.value,
-            "utility": decision.utility,
-            "policy_version": decision.policy_version,
-        }
-    )
+    _selection_log[session_id].append({
+        "task_id": next_task.id,
+        "skill_id": next_task.skill_id,
+        "reason": decision.reason,
+        "decision_kind": decision.kind.value,
+        "utility": decision.utility,
+        "policy_version": decision.policy_version,
+    })
     return {
         "assessment_complete": False,
         "next_task": next_task,
@@ -139,6 +131,24 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
         "frontier": snapshot,
         "policy_version": POLICY_VERSION,
         "scientific_status": "UNVALIDATED_PILOT",
+    }
+
+
+@router.get("/{session_id}/analysis")
+def get_analysis(session_id: str) -> dict:
+    session = _sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Assessment session not found")
+    evidence = _evidence.get(session_id, [])
+    learner_state = derive_learner_state(evidence)
+    hypotheses = evaluate_english_hypotheses(evidence) if session.language == "en" else []
+    bottleneck = decide_bottleneck(evidence, session.language)
+    return {
+        "learner_state": {skill: state.model_dump() for skill, state in learner_state.items()},
+        "hypotheses": [h.model_dump() for h in hypotheses],
+        "bottleneck": bottleneck.model_dump(),
+        "scientific_status": "UNVALIDATED_PILOT",
+        "warning": "Instructional inference only. Not a medical, neurodevelopmental, or dyslexia diagnosis.",
     }
 
 
