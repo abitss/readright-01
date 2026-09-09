@@ -11,7 +11,7 @@ from readright.assessment.frontier import (
 )
 from readright.assessment.models import AssessmentMode, AssessmentTask
 from readright.assessment.skill_graph import prerequisites_for
-from readright.assessment.task_bank import META, TASKS, tasks_for_skill
+from readright.assessment.task_bank import META, tasks_for_skill
 
 POLICY_VERSION = "assessment-v1-adaptive-pilot-2026-09"
 
@@ -36,7 +36,6 @@ class TaskDecision:
     utility: float | None = None
 
 
-# Deliberately transparent broad anchors. These are sequencing choices, not norms.
 ENGLISH_BASELINE_SEQUENCE = [
     "EN-ORAL-COMP",
     "EN-GPC",
@@ -58,11 +57,11 @@ HINDI_BASELINE_SEQUENCE = [
     "HI-SPELL",
 ]
 
-
-MODE_TIME_BUDGET_SECONDS = {
-    AssessmentMode.baseline: 12 * 60,
-    AssessmentMode.focused_probe: 5 * 60,
-    AssessmentMode.progress_probe: 3 * 60,
+# Some graph nodes represent constructs rather than directly administered task
+# families. These mappings point to observable task families that can help
+# localize uncertainty. They are assessment probes, not causal claims.
+DIAGNOSTIC_PROBE_SKILLS = {
+    "EN-PHON-AWARE": ["EN-PHON-ISOLATE", "EN-PHON-SEG"],
 }
 
 
@@ -96,12 +95,7 @@ def _parallel_to_last(skill_id: str, language: str, evidence: list[dict]) -> Ass
 
 
 def _task_utility(task: AssessmentTask, target_skill: str, evidence: list[dict]) -> float:
-    """Pilot heuristic, never treated as psychometric information gain.
-
-    This prioritizes unresolved target evidence, parallel-form value, reasonable burden,
-    and prerequisite localization. It is intentionally interpretable and replaceable
-    after calibration data exist.
-    """
+    """Transparent pilot ranking heuristic, not calibrated information gain."""
 
     target = summarize_skill(evidence, target_skill)
     evidence_need = {
@@ -131,6 +125,26 @@ def _best_task_for_skill(skill_id: str, language: str, evidence: list[dict]) -> 
     return ranked[0]
 
 
+def _probe_construct(prerequisite: str, language: str, evidence: list[dict]) -> tuple[AssessmentTask | None, float | None, str]:
+    task, utility = _best_task_for_skill(prerequisite, language, evidence)
+    if task:
+        return task, utility, prerequisite
+
+    for observable_skill in DIAGNOSTIC_PROBE_SKILLS.get(prerequisite, []):
+        observable_summary = summarize_skill(evidence, observable_skill)
+        if observable_summary.state in {
+            SamplingState.unseen,
+            SamplingState.unusable_only,
+            SamplingState.assisted_only,
+            SamplingState.negative_sample,
+            SamplingState.conflicting,
+        }:
+            task, utility = _best_task_for_skill(observable_skill, language, evidence)
+            if task:
+                return task, utility, observable_skill
+    return None, None, prerequisite
+
+
 def _first_unresolved_prerequisite(skill_id: str, language: str, evidence: list[dict]) -> TaskDecision | None:
     for prerequisite in prerequisites_for(skill_id):
         summary = summarize_skill(evidence, prerequisite)
@@ -141,11 +155,11 @@ def _first_unresolved_prerequisite(skill_id: str, language: str, evidence: list[
             SamplingState.negative_sample,
             SamplingState.conflicting,
         }:
-            task, utility = _best_task_for_skill(prerequisite, language, evidence)
+            task, utility, observable = _probe_construct(prerequisite, language, evidence)
             if task:
                 return TaskDecision(
                     task=task,
-                    reason=f"Probe prerequisite {prerequisite} before interpreting {skill_id}.",
+                    reason=f"Probe {observable} to localize unresolved prerequisite construct {prerequisite} before interpreting {skill_id}.",
                     kind=DecisionKind.prerequisite_probe,
                     utility=utility,
                 )
@@ -194,7 +208,6 @@ def _baseline_sequence(language: str) -> list[str]:
 def _baseline_next(language: str, evidence: list[dict]) -> TaskDecision:
     sequence = _baseline_sequence(language)
 
-    # If a lower-level repeated negative is unresolved, localize it before climbing.
     for skill_id in sequence:
         summary = summarize_skill(evidence, skill_id)
         if summary.state == SamplingState.replicated_negative:
@@ -256,7 +269,6 @@ def select_next_adaptive_task(
         return TaskDecision(None, "Focused probe has no unused safe pilot item.", DecisionKind.abstain)
 
     if mode == AssessmentMode.progress_probe:
-        # Progress probes require comparable tasks; they do not escalate to broad diagnosis.
         task = _parallel_to_last(current_skill_id, language, evidence)
         if task:
             return TaskDecision(
