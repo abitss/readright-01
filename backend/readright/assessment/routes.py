@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from readright.assessment.adaptive_policy import POLICY_VERSION, select_next_adaptive_task
 from readright.assessment.evidence_quality import rate_evidence
@@ -10,6 +11,8 @@ from readright.assessment.task_bank import META, bank_summary, get_task_stimulus
 from readright.intelligence.bottleneck import decide_bottleneck
 from readright.intelligence.learner_state import derive_learner_state
 from readright.intelligence.hypotheses import evaluate_english_hypotheses
+from readright.persistence.database import get_db
+from readright.persistence.store import append_event, ensure_learner
 
 router = APIRouter()
 _sessions: dict[str, AssessmentSession] = {}
@@ -23,10 +26,13 @@ def get_bank_summary() -> dict:
 
 
 @router.post("/start")
-def start_assessment(request: StartAssessmentRequest) -> dict:
+def start_assessment(request: StartAssessmentRequest, db: Session = Depends(get_db)) -> dict:
     try:
         task = select_first_task(request)
+        ensure_learner(db, request.learner_id, request.language)
+        db.commit()
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     session = AssessmentSession(
@@ -57,7 +63,7 @@ def start_assessment(request: StartAssessmentRequest) -> dict:
 
 
 @router.post("/{session_id}/respond")
-def record_response(session_id: str, response: ResponseInput) -> dict:
+def record_response(session_id: str, response: ResponseInput, db: Session = Depends(get_db)) -> dict:
     session = _sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Assessment session not found")
@@ -87,6 +93,21 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
     }
     _evidence[session_id].append(event)
 
+    try:
+        persistent_event = append_event(
+            db,
+            learner_id=session.learner_id,
+            language=session.language,
+            event_type="ASSESSMENT_EVIDENCE",
+            payload=event,
+            engine_version=POLICY_VERSION,
+            source_session_id=session.id,
+            skill_id=completed_task.skill_id,
+        )
+    except ValueError as exc:
+        _evidence[session_id].pop()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     decision = select_next_adaptive_task(
         mode=session.mode,
         language=session.language,
@@ -104,6 +125,8 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
             "assessment_complete": True,
             "outcome": stop_outcome.value,
             "evidence_count": len(_evidence[session_id]),
+            "persistent_event_id": persistent_event.id,
+            "learner_sequence_no": persistent_event.sequence_no,
             "frontier": snapshot,
             "policy_version": POLICY_VERSION,
             "scientific_status": "UNVALIDATED_PILOT",
@@ -128,6 +151,8 @@ def record_response(session_id: str, response: ResponseInput) -> dict:
         "decision_kind": decision.kind.value,
         "utility": decision.utility,
         "evidence_count": len(_evidence[session_id]),
+        "persistent_event_id": persistent_event.id,
+        "learner_sequence_no": persistent_event.sequence_no,
         "frontier": snapshot,
         "policy_version": POLICY_VERSION,
         "scientific_status": "UNVALIDATED_PILOT",
