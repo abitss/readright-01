@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from readright.intelligence.hypotheses import ENGLISH_HYPOTHESES
 from readright.intelligence.intervention_models import (
     InterventionFidelity,
     VerificationEvidence,
@@ -99,6 +100,14 @@ def verify_intervention_response(request: InterventionResponseRequest, db: Sessi
     persisted_event_ids: list[str] = []
     current = None
     if request.learner_id:
+        spec = ENGLISH_HYPOTHESES.get(request.hypothesis_id) if request.language == "en" else None
+        target_skill_id = spec.target_skill if spec else None
+        if target_skill_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot persist verification without a language-specific hypothesis-to-skill mapping.",
+            )
+
         try:
             for verification in request.verification_events:
                 event = append_event(
@@ -116,7 +125,7 @@ def verify_intervention_response(request: InterventionResponseRequest, db: Sessi
                         "fidelity": request.fidelity.value,
                     },
                     engine_version=decision.engine_version,
-                    skill_id=None,
+                    skill_id=target_skill_id,
                     hypothesis_id=request.hypothesis_id,
                     intervention_id=request.intervention_id,
                 )
@@ -129,6 +138,7 @@ def verify_intervention_response(request: InterventionResponseRequest, db: Sessi
                 event_type="HYPOTHESIS_REVISION",
                 payload=decision.model_dump(mode="json"),
                 engine_version=decision.engine_version,
+                skill_id=target_skill_id,
                 hypothesis_id=request.hypothesis_id,
                 intervention_id=request.intervention_id,
             )
