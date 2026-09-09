@@ -16,6 +16,10 @@ class StartAssessmentRequest(BaseModel):
     language: Literal["en", "hi"]
     mode: AssessmentMode
     teacher_concern: str | None = None
+    # Focused/progress assessment must use an explicit scientific target.
+    # Free-text teacher concern is preserved as context but never parsed into a
+    # scientific skill label by an LLM in Assessment Engine v1.
+    target_skill_id: str | None = None
 
 
 class TaskPrompt(BaseModel):
@@ -43,6 +47,7 @@ class AssessmentSession(BaseModel):
     mode: AssessmentMode
     status: Literal["active", "paused", "complete"] = "active"
     teacher_concern: str | None = None
+    target_skill_id: str | None = None
     current_task: AssessmentTask | None = None
 
 
@@ -54,4 +59,4 @@ class ResponseInput(BaseModel):
     assistance: Literal["none", "repeat", "hint", "model"] = "none"
     self_corrected: bool = False
     teacher_confirmed: bool = False
-    quality_flags: list[str] = []
+    quality_flags: list[str] = Field(default_factory=list)
