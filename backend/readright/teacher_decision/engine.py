@@ -3,7 +3,6 @@ from __future__ import annotations
 from readright.intelligence.intervention_library import interventions_for_hypothesis
 from readright.intelligence.longitudinal import replay_longitudinal
 from readright.persistence.models import LearnerEventRecord
-from readright.persistence.store import assessment_evidence_from_events
 from readright.teacher_decision.models import (
     DoView,
     LearnerTeacherDecision,
@@ -15,10 +14,17 @@ from readright.teacher_decision.models import (
 ENGINE_VERSION = "teacher-decision-v1-pilot-2026-09"
 
 
-def _latest_event(events: list[LearnerEventRecord], event_type: str, hypothesis_id: str | None = None):
+def _latest_event(
+    events: list[LearnerEventRecord],
+    event_type: str,
+    hypothesis_id: str | None = None,
+    intervention_id: str | None = None,
+):
     candidates = [e for e in events if e.event_type == event_type]
     if hypothesis_id:
         candidates = [e for e in candidates if e.hypothesis_id == hypothesis_id]
+    if intervention_id:
+        candidates = [e for e in candidates if e.intervention_id == intervention_id]
     return candidates[-1] if candidates else None
 
 
@@ -81,6 +87,16 @@ def _why_from_bottleneck(bottleneck: dict) -> WhyView:
     )
 
 
+def _do_view(intervention) -> DoView:
+    return DoView(
+        title=intervention.title,
+        duration_minutes=intervention.duration_minutes,
+        group_size=intervention.group_size,
+        steps=intervention.steps,
+        intervention_id=intervention.intervention_id,
+    )
+
+
 def build_teacher_decision(learner_id: str, language: str, events: list[LearnerEventRecord]) -> LearnerTeacherDecision:
     replay = replay_longitudinal(events, language)
     bottleneck = replay["bottleneck"]
@@ -105,38 +121,6 @@ def build_teacher_decision(learner_id: str, language: str, events: list[LearnerE
     hypothesis_id = primary["hypothesis_id"]
     intervention_candidates = interventions_for_hypothesis(hypothesis_id)
     intervention = intervention_candidates[0] if intervention_candidates else None
-
-    latest_plan = _latest_event(events, "INTERVENTION_PLAN_CREATED", hypothesis_id)
-    intervention_id = latest_plan.intervention_id if latest_plan else (intervention.intervention_id if intervention else None)
-    verification_stage, verification_status = _verification_stage(events, hypothesis_id, intervention_id)
-
-    if latest_plan and verification_status != "COMPLETE":
-        reserved = latest_plan.payload
-        task_key = {
-            "INDEPENDENCE": "acquisition_task_ids",
-            "TRANSFER": "transfer_task_ids",
-            "RETENTION": "retention_task_ids",
-        }[verification_stage]
-        verify = VerifyView(
-            stage=verification_stage,
-            instruction={
-                "INDEPENDENCE": "Check whether the learner can perform the target independently without the teaching scaffold.",
-                "TRANSFER": "Use unseen equivalent material to check whether learning generalizes.",
-                "RETENTION": "Run a later check to confirm the learning is maintained over time.",
-            }[verification_stage],
-            task_ids=reserved.get(task_key, []),
-            status=verification_status,
-        )
-        return LearnerTeacherDecision(
-            learner_id=learner_id,
-            language=language,
-            outcome=TeacherDecisionOutcome.VERIFY_DUE,
-            why=why,
-            do=None,
-            verify=verify,
-            learner_state=learner_state,
-        )
-
     if intervention is None:
         return LearnerTeacherDecision(
             learner_id=learner_id,
@@ -146,25 +130,73 @@ def build_teacher_decision(learner_id: str, language: str, events: list[LearnerE
             learner_state=learner_state,
         )
 
-    do = DoView(
-        title=intervention.title,
-        duration_minutes=intervention.duration_minutes,
-        group_size=intervention.group_size,
-        steps=intervention.steps,
-        intervention_id=intervention.intervention_id,
-    )
+    latest_plan = _latest_event(events, "INTERVENTION_PLAN_CREATED", hypothesis_id)
+    intervention_id = latest_plan.intervention_id if latest_plan else intervention.intervention_id
+    latest_delivery = _latest_event(events, "INTERVENTION_DELIVERED", hypothesis_id, intervention_id)
+
+    # A plan is not evidence that instruction happened. Keep the teacher in DO until delivery is recorded.
+    if latest_delivery is None or (latest_plan and latest_delivery.sequence_no < latest_plan.sequence_no):
+        return LearnerTeacherDecision(
+            learner_id=learner_id,
+            language=language,
+            outcome=TeacherDecisionOutcome.ACTION_READY,
+            why=why,
+            do=_do_view(intervention),
+            verify=VerifyView(
+                stage="INDEPENDENCE",
+                instruction="After delivery, verify independent performance using reserved unseen items.",
+                task_ids=(latest_plan.payload.get("acquisition_task_ids", []) if latest_plan else []),
+                status="PLANNED_AFTER_INTERVENTION",
+            ),
+            learner_state=learner_state,
+        )
+
+    verification_stage, verification_status = _verification_stage(events, hypothesis_id, intervention_id)
+    reserved = latest_plan.payload if latest_plan else {}
+    task_key = {
+        "INDEPENDENCE": "acquisition_task_ids",
+        "TRANSFER": "transfer_task_ids",
+        "RETENTION": "retention_task_ids",
+    }[verification_stage]
     verify = VerifyView(
-        stage="INDEPENDENCE",
-        instruction="After teaching, verify independent performance with reserved unseen items before claiming learning.",
-        task_ids=[],
-        status="PLANNED_AFTER_INTERVENTION",
+        stage=verification_stage,
+        instruction={
+            "INDEPENDENCE": "Check whether the learner can perform the target independently without the teaching scaffold.",
+            "TRANSFER": "Use unseen equivalent material to check whether learning generalizes.",
+            "RETENTION": "Run a later check to confirm that learning is maintained over time.",
+        }[verification_stage],
+        task_ids=reserved.get(task_key, []),
+        status=verification_status,
     )
+
+    if verification_status == "COMPLETE":
+        return LearnerTeacherDecision(
+            learner_id=learner_id,
+            language=language,
+            outcome=TeacherDecisionOutcome.NO_ACTION,
+            why=why,
+            do=None,
+            verify=verify,
+            learner_state=learner_state,
+        )
+
+    if verification_status == "DUE_LATER":
+        return LearnerTeacherDecision(
+            learner_id=learner_id,
+            language=language,
+            outcome=TeacherDecisionOutcome.NO_ACTION,
+            why=why,
+            do=None,
+            verify=verify,
+            learner_state=learner_state,
+        )
+
     return LearnerTeacherDecision(
         learner_id=learner_id,
         language=language,
-        outcome=TeacherDecisionOutcome.ACTION_READY,
+        outcome=TeacherDecisionOutcome.VERIFY_DUE,
         why=why,
-        do=do,
+        do=None,
         verify=verify,
         learner_state=learner_state,
     )
