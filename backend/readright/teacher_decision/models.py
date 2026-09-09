@@ -53,6 +53,7 @@ class InstructionGroup(BaseModel):
     hypothesis_id: str | None = None
     intervention_id: str | None = None
     verification_stage: str | None = None
+    recommended_minutes: int = Field(default=5, ge=1, le=30)
     priority: int
     reason: str
 
