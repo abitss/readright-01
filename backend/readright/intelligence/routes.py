@@ -24,6 +24,16 @@ class InterventionPlanRequest(BaseModel):
     learner_id: str | None = None
 
 
+class InterventionDeliveryRequest(BaseModel):
+    learner_id: str
+    language: str = "en"
+    hypothesis_id: str
+    intervention_id: str
+    fidelity: InterventionFidelity = InterventionFidelity.UNKNOWN
+    minutes_delivered: int = Field(gt=0, le=90)
+    notes: str | None = None
+
+
 class InterventionResponseRequest(BaseModel):
     hypothesis_id: str
     fidelity: InterventionFidelity
@@ -85,6 +95,37 @@ def create_intervention_plan(request: InterventionPlanRequest, db: Session = Dep
         "plan": plan.model_dump(),
         "outcome": "INTERVENTION_PLAN_READY",
         "persistent_event_id": persisted_event_id,
+        "scientific_status": "UNVALIDATED_PILOT",
+    }
+
+
+@router.post("/deliver")
+def record_intervention_delivery(request: InterventionDeliveryRequest, db: Session = Depends(get_db)) -> dict:
+    spec = ENGLISH_HYPOTHESES.get(request.hypothesis_id) if request.language == "en" else None
+    if spec is None:
+        raise HTTPException(status_code=422, detail="No language-specific hypothesis mapping is available for this delivery.")
+    try:
+        event = append_event(
+            db,
+            learner_id=request.learner_id,
+            language=request.language,
+            event_type="INTERVENTION_DELIVERED",
+            payload={
+                "fidelity": request.fidelity.value,
+                "minutes_delivered": request.minutes_delivered,
+                "notes": request.notes,
+            },
+            engine_version="intervention-delivery-v1-pilot-2026-09",
+            skill_id=spec.target_skill,
+            hypothesis_id=request.hypothesis_id,
+            intervention_id=request.intervention_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "event_id": event.id,
+        "sequence_no": event.sequence_no,
+        "outcome": "INTERVENTION_DELIVERY_RECORDED",
         "scientific_status": "UNVALIDATED_PILOT",
     }
 
