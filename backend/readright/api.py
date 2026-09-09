@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 
 from readright.assessment.routes import router as assessment_router
+from readright.intelligence.routes import router as intelligence_router
 
 app = FastAPI(
     title="ReadRight Engine",
-    version="0.1.0",
+    version="0.2.0",
     description="Scientific assessment and learning intelligence service.",
 )
 
@@ -15,3 +16,4 @@ def health() -> dict[str, str]:
 
 
 app.include_router(assessment_router, prefix="/assessments", tags=["assessments"])
+app.include_router(intelligence_router, prefix="/intelligence", tags=["intervention-intelligence"])
