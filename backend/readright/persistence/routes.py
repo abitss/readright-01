@@ -4,6 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from readright.intelligence.intervention_models import VerificationStage
@@ -55,6 +56,22 @@ def _rebuild_and_snapshot(db: Session, learner_id: str, language: str, note: str
         note=note,
     )
     return {**replay, "snapshot_id": snapshot.id, "through_sequence_no": snapshot.through_sequence_no}
+
+
+@router.get("")
+def list_learners(db: Session = Depends(get_db)) -> dict:
+    learners = list(db.scalars(select(LearnerRecord).order_by(LearnerRecord.created_at.asc())))
+    result = []
+    for learner in learners:
+        events = list_events(db, learner.id)
+        result.append({
+            "learner_id": learner.id,
+            "language": learner.language,
+            "created_at": learner.created_at.isoformat(),
+            "event_count": len(events),
+            "latest_sequence_no": events[-1].sequence_no if events else 0,
+        })
+    return {"learners": result, "count": len(result)}
 
 
 @router.post("/{learner_id}/verification")
