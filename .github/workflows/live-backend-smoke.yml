@@ -1,0 +1,31 @@
+name: ReadRight Live Backend Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/live-backend-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for backend deployment
+        run: sleep 75
+
+      - name: Verify live PostgreSQL persistence
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --retry 5 --retry-delay 10 --max-time 30 https://readright-01-engine.onrender.com/ready)"
+          echo "$body"
+          python - "$body" <<'PY'
+          import json, sys
+          data = json.loads(sys.argv[1])
+          assert data.get("status") == "ready", data
+          assert data.get("storage_backend") == "postgresql", data
+          assert data.get("persistent") is True, data
+          assert data.get("storage_ok") is True, data
+          print("ReadRight live backend is using healthy persistent PostgreSQL storage.")
+          PY
