@@ -53,6 +53,8 @@ export function TaskPlayer() {
     return "Ready";
   }, [phase]);
 
+  const displayStimulus = typeof stimulus?.display === "string" ? stimulus.display : null;
+
   async function startAssessment() {
     const clean = learnerId.trim();
     if (!clean) {
@@ -185,10 +187,10 @@ export function TaskPlayer() {
           <p className="mt-2 text-xs text-[var(--rr-muted)]">{task?.skill_id}</p>
           <h1 className="mt-5 text-3xl font-semibold tracking-[-0.035em] md:text-5xl">{task?.prompt.learner_text || "Listen carefully."}</h1>
 
-          {(task?.prompt.spoken_prompt || stimulus?.display) && (
+          {(task?.prompt.spoken_prompt || displayStimulus) && (
             <button className="mt-8 inline-flex items-center gap-3 rounded-2xl border border-[var(--rr-border)] bg-white px-6 py-4 text-2xl font-semibold shadow-sm">
               {task?.prompt.spoken_prompt && <Volume2 size={24} />}
-              {String(task?.prompt.spoken_prompt || stimulus?.display || "")}
+              {task?.prompt.spoken_prompt || displayStimulus}
             </button>
           )}
 
